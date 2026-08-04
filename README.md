@@ -63,7 +63,7 @@ CrossOver documents `wine --bottle <bottle> --cx-app <executable.exe>` as its co
 Requirements: macOS 13+, Xcode Command Line Tools, CrossOver.
 
 ```bash
-./Scripts/install-user.sh
+bash ./Scripts/install-user.sh
 ```
 
 The app is installed to:
@@ -78,7 +78,7 @@ Opening the app once registers the `ngm` URL scheme with Launch Services. The br
 
 ```bash
 swift test
-./Scripts/build-app.sh
+bash ./Scripts/build-app.sh
 ```
 
 A safe parser test fixture is included. Do not commit real `sess...` values or complete launch URLs.
