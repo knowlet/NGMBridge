@@ -50,7 +50,7 @@ public struct NGMURLParser: Sendable {
             throw NGMURLParserError.urlTooLong
         }
         guard let url = URL(string: rawURL),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else {
             throw NGMURLParserError.invalidURL
         }
@@ -85,12 +85,14 @@ public struct NGMURLParser: Sendable {
         guard !gameCode.isEmpty else {
             throw NGMURLParserError.malformedPayload("empty game code")
         }
-        let serviceCode: String? = gameParts.count == 2 && !gameParts[1].isEmpty
+        let serviceCode: String? =
+            gameParts.count == 2 && !gameParts[1].isEmpty
             ? String(gameParts[1])
             : nil
 
         let passarg = try required("passarg", from: fields)
-        let passArguments = passarg
+        let passArguments =
+            passarg
             .split(whereSeparator: Self.isASCIIWhitespace)
             .map(String.init)
         guard !passArguments.isEmpty else {
@@ -149,8 +151,9 @@ public struct NGMURLParser: Sendable {
 
             let keyStart = index
             while index < payload.endIndex,
-                  payload[index] != ":",
-                  !Self.isASCIIWhitespace(payload[index]) {
+                payload[index] != ":",
+                !Self.isASCIIWhitespace(payload[index])
+            {
                 index = payload.index(after: index)
             }
             guard index < payload.endIndex, payload[index] == ":" else {
@@ -158,7 +161,7 @@ public struct NGMURLParser: Sendable {
             }
             let key = payload[keyStart..<index].lowercased()
             guard !key.isEmpty,
-                  key.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+                key.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
             else {
                 throw NGMURLParserError.malformedPayload("invalid field name")
             }
@@ -194,7 +197,7 @@ public struct NGMURLParser: Sendable {
 
     private static func isASCIIWhitespace(_ character: Character) -> Bool {
         guard character.unicodeScalars.count == 1,
-              let scalar = character.unicodeScalars.first
+            let scalar = character.unicodeScalars.first
         else {
             return false
         }

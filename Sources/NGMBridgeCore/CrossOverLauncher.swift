@@ -27,7 +27,7 @@ public struct CrossOverCommand: Equatable, Sendable {
     }
 }
 
-public struct CrossOverLauncher: Sendable {
+public struct CrossOverLauncher {
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {
@@ -46,7 +46,8 @@ public struct CrossOverLauncher: Sendable {
             throw CrossOverLauncherError.wineNotExecutable(configuration.winePath)
         }
         if configuration.launchMode == .direct,
-           !fileManager.fileExists(atPath: configuration.executable) {
+            !fileManager.fileExists(atPath: configuration.executable)
+        {
             throw CrossOverLauncherError.executableNotFound(configuration.executable)
         }
 

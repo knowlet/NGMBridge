@@ -43,7 +43,7 @@ public struct BridgeConfiguration: Codable, Equatable, Sendable {
             throw BridgeConfigurationError.emptyExecutable
         }
         guard !allowedGameCodes.isEmpty,
-              allowedGameCodes.allSatisfy({ !$0.isEmpty })
+            allowedGameCodes.allSatisfy({ !$0.isEmpty })
         else {
             throw BridgeConfigurationError.emptyAllowedGameCodes
         }
@@ -58,7 +58,8 @@ public struct BridgeConfiguration: Codable, Equatable, Sendable {
             appropriateFor: nil,
             create: true
         )
-        return root
+        return
+            root
             .appendingPathComponent("NGMBridge", isDirectory: true)
             .appendingPathComponent("config.json")
     }
