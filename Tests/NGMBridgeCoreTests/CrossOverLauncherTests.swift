@@ -7,7 +7,8 @@ struct CrossOverLauncherTests {
     func buildsCxAppCommandWithoutShell() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let wine = root
+        let wine =
+            root
             .appendingPathComponent("CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine")
         try FileManager.default.createDirectory(
             at: wine.deletingLastPathComponent(),
@@ -43,11 +44,12 @@ struct CrossOverLauncherTests {
         )
 
         #expect(command.executableURL.path == wine.path)
-        #expect(command.arguments == [
-            "--bottle", "Classic",
-            "--cx-app", "Maplestory_Classic.exe",
-            "account", "sessREDACTED", "2373", "944"
-        ])
+        #expect(
+            command.arguments == [
+                "--bottle", "Classic",
+                "--cx-app", "Maplestory_Classic.exe",
+                "account", "sessREDACTED", "2373", "944"
+            ])
     }
 
     @Test

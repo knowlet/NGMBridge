@@ -77,6 +77,7 @@ Opening the app once registers the `ngm` URL scheme with Launch Services. The br
 ## Development
 
 ```bash
+swift format lint --recursive --strict Sources Tests Package.swift
 swift test
 bash ./Scripts/build-app.sh
 ```

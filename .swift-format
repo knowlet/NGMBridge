@@ -1,0 +1,11 @@
+{
+  "indentConditionalCompilationBlocks": false,
+  "indentation": { "spaces": 4 },
+  "lineLength": 240,
+  "multiElementCollectionTrailingCommas": false,
+  "rules": {
+    "NoAccessLevelOnExtensionDeclaration": false,
+    "UseLetInEveryBoundCaseVariable": false
+  },
+  "version": 1
+}

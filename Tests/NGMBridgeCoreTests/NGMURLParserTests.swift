@@ -5,7 +5,8 @@ import Testing
 struct NGMURLParserTests {
     @Test
     func parsesMapleStoryClassicLaunchURL() throws {
-        let raw = "ngm://launch/%20-mode%3Alaunch%20-game%3A'2982%402141'%20-passarg%3A'4741097%20sessREDACTED%202373%20944'%20-position%3A'GameWeb%7Chttps%3A%2F%2Fmaplestoryclassic.beanfun.com%2FMain%3Faf_click_id%3D'%20-architectureplatform%3A'none'%20-timestamp%3A1785853241599"
+        let raw =
+            "ngm://launch/%20-mode%3Alaunch%20-game%3A'2982%402141'%20-passarg%3A'4741097%20sessREDACTED%202373%20944'%20-position%3A'GameWeb%7Chttps%3A%2F%2Fmaplestoryclassic.beanfun.com%2FMain%3Faf_click_id%3D'%20-architectureplatform%3A'none'%20-timestamp%3A1785853241599"
 
         let result = try NGMURLParser().parse(raw)
 
