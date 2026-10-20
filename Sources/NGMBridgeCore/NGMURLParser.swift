@@ -24,12 +24,12 @@ public enum NGMURLParserError: LocalizedError, Equatable {
             return "Only ngm://launch URLs are supported"
         case let .malformedPayload(reason):
             return "Malformed NGM launch payload: \(reason)"
-        case let .duplicateField(field):
-            return "Duplicate NGM field: \(field)"
+        case .duplicateField:
+            return "Duplicate NGM field"
         case let .missingField(field):
             return "Missing NGM field: \(field)"
-        case let .unsupportedMode(mode):
-            return "Unsupported NGM mode: \(mode)"
+        case .unsupportedMode:
+            return "Unsupported NGM mode"
         case .emptyPassArguments:
             return "NGM passarg is empty"
         case .invalidTimestamp:

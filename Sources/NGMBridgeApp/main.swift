@@ -37,13 +37,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let configuration = try BridgeConfiguration.loadOrCreate()
             try launcher.launch(request, configuration: configuration)
             logger.notice(
-                "CrossOver launch started for game code \(request.gameCode, privacy: .public); argument values redacted"
+                "CrossOver launch started; URL and argument values redacted"
             )
             if configuration.terminateAfterLaunch {
                 NSApp.terminate(nil)
             }
         } catch {
-            logger.error("Launch rejected: \(error.localizedDescription, privacy: .public)")
+            // Error descriptions can contain untrusted URL fields or system details.
+            // Keep persistent logs independent of those values.
+            logger.error("Launch rejected; details shown in the local error dialog")
             showError(error.localizedDescription)
         }
     }

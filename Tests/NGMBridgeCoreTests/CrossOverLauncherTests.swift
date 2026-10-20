@@ -53,6 +53,40 @@ struct CrossOverLauncherTests {
     }
 
     @Test
+    func launchesFixtureWithLiteralArgumentsAndDebugSuppressed() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let wine = root.appendingPathComponent("CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine")
+        let record = root.appendingPathComponent("arguments.txt")
+        let marker = root.appendingPathComponent("must-not-exist")
+        try FileManager.default.createDirectory(
+            at: wine.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let script = "#!/bin/sh\nprintf '%s\\n' \"$WINEDEBUG\" \"$@\" > '\(record.path)'\n"
+        try Data(script.utf8).write(to: wine)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wine.path)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let arguments = ["sessREDACTED", "$(touch \(marker.path))", "literal;value", "two words"]
+        let request = LaunchRequest(
+            mode: "launch", game: "2982", gameCode: "2982", serviceCode: nil,
+            passArguments: arguments, position: nil, architecturePlatform: nil,
+            timestampMilliseconds: nil)
+        let configuration = BridgeConfiguration(
+            crossoverAppPath: root.appendingPathComponent("CrossOver.app").path,
+            bottle: "Classic test", executable: "Game.exe")
+
+        let process = try CrossOverLauncher().launch(request, configuration: configuration)
+        process.waitUntilExit()
+
+        #expect(process.terminationStatus == 0)
+        #expect(process.environment?["WINEDEBUG"] == "-all")
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+        let recorded = try String(contentsOf: record, encoding: .utf8)
+        #expect(
+            recorded == (["-all", "--bottle", "Classic test", "--cx-app", "Game.exe"] + arguments)
+                .joined(separator: "\n") + "\n")
+    }
+
+    @Test
     func rejectsUnexpectedGameCodeBeforeLaunch() throws {
         let request = LaunchRequest(
             mode: "launch",
