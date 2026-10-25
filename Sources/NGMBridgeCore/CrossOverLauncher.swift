@@ -7,8 +7,8 @@ public enum CrossOverLauncherError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case let .gameNotAllowed(code):
-            return "NGM game code is not allowed: \(code)"
+        case .gameNotAllowed:
+            return "NGM game code is not allowed"
         case let .wineNotExecutable(path):
             return "CrossOver wine was not found or is not executable: \(path)"
         case let .executableNotFound(path):
