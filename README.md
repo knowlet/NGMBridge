@@ -79,10 +79,14 @@ Opening the app once registers the `ngm` URL scheme with Launch Services. The br
 ```bash
 swift format lint --recursive --strict Sources Tests Package.swift
 swift test
+bash ./Scripts/test-install.sh
 bash ./Scripts/build-app.sh
 ```
 
 A safe parser test fixture is included. Do not commit real `sess...` values or complete launch URLs.
+
+The installer script test uses temporary fixtures and stubbed Swift, signing, and
+app-opening commands. It does not install or open the real app.
 
 ## Security notes
 
