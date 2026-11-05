@@ -69,3 +69,35 @@ bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/failure.stdout" 2> "$TEMP/
 [[ -f "$DEST/preserve-marker" ]]
 [[ ! -e "$FIXTURE_OPEN_LOG" ]]
 printf 'PASS: build failure preserves the existing fixture without opening it\n'
+
+# Simulate a copy failing after creating partial output, as on a full disk.
+unset FIXTURE_BUILD_STATUS
+cat > "$FIXTURE_ROOT/bin/cp" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" == "-R" && "$2" == "$FIXTURE_ROOT/.build/NGMBridge.app" ]]; then
+    mkdir -p "$3"
+    printf 'partial copy\n' > "$3/partial-marker"
+    exit 43
+fi
+exec /bin/cp "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/cp"
+status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/copy-failure.stdout" 2> "$TEMP/copy-failure.stderr" || status=$?
+[[ "$status" == 43 ]]
+[[ -f "$DEST/preserve-marker" ]]
+[[ ! -e "$DEST/partial-marker" ]]
+[[ ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: partial copy failure preserves the existing fixture and cleans staging\n'
+
+# A failed first installation must not leave a partial destination either.
+rm -rf "$DEST"
+status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/first-failure.stdout" 2> "$TEMP/first-failure.stderr" || status=$?
+[[ "$status" == 43 ]]
+[[ ! -e "$DEST" ]]
+[[ ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: failed first copy leaves no installed fixture\n'
