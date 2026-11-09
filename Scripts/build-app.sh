@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-swift build -c release --product NGMBridge
+# Keep stdout reserved for the app path consumed by install-user.sh.
+swift build -c release --product NGMBridge >&2
 BIN_DIR="$(swift build -c release --show-bin-path)"
 APP="$ROOT/.build/NGMBridge.app"
 
