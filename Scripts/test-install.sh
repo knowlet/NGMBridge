@@ -101,3 +101,58 @@ bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/first-failure.stdout" 2> "
 [[ ! -e "$FIXTURE_OPEN_LOG" ]]
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 printf 'PASS: failed first copy leaves no installed fixture\n'
+
+# A failed final rename must not discard a working installation.
+rm "$FIXTURE_ROOT/bin/cp"
+mkdir -p "$DEST"
+printf 'preserve existing install\n' > "$DEST/preserve-marker"
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" == *'/.NGMBridge-install.'*'/NGMBridge.app' ]]; then
+    exit 44
+fi
+exec /bin/mv "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/mv"
+status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/move-failure.stdout" 2> "$TEMP/move-failure.stderr" || status=$?
+[[ "$status" == 44 ]]
+[[ -f "$DEST/preserve-marker" ]]
+[[ ! -e "$FIXTURE_OPEN_LOG" ]]
+printf 'PASS: final move failure preserves existing installation\n'
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+rm -rf "$DEST"
+status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/first-move.stdout" 2> "$TEMP/first-move.stderr" || status=$?
+[[ "$status" == 44 && ! -e "$DEST" && ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: first-install move failure cleans staging\n'
+
+mkdir -p "$DEST"
+printf 'preserve existing install\n' > "$DEST/preserve-marker"
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+exit 45
+STUB
+status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/backup-failure.stdout" 2> "$TEMP/backup-failure.stderr" || status=$?
+[[ "$status" == 45 && -f "$DEST/preserve-marker" && ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: backup move failure preserves the original installation\n'
+
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" == *'/.NGMBridge-install.'* ]]; then
+    exit 46
+fi
+exec /bin/mv "$@"
+STUB
+status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/restore-failure.stdout" 2> "$TEMP/restore-failure.stderr" || status=$?
+[[ "$status" == 46 && ! -e "$DEST" && ! -e "$FIXTURE_OPEN_LOG" ]]
+SAVED="$(find "$HOME/Applications" -path '*/previous.app/preserve-marker' -print)"
+[[ -n "$SAVED" ]]
+grep -Fq "Previous installation retained at: ${SAVED%/preserve-marker}" "$TEMP/restore-failure.stderr"
+printf 'PASS: rollback failure retains the backup and reports its location\n'
