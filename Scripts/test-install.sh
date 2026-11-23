@@ -144,7 +144,19 @@ printf 'PASS: backup move failure preserves the original installation\n'
 cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
 #!/bin/bash
 set -euo pipefail
-if [[ "$1" == *'/.NGMBridge-install.'* ]]; then
+source_path=""
+for arg in "$@"; do
+    case "$arg" in
+        -*)
+            continue
+            ;;
+        *)
+            source_path="$arg"
+            break
+            ;;
+    esac
+done
+if [[ "$source_path" == *'/.NGMBridge-install.'* ]]; then
     exit 46
 fi
 exec /bin/mv "$@"

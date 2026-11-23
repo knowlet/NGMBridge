@@ -169,11 +169,96 @@ displaced="${displaced_line#Unexpected destination retained at: }"
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 printf 'PASS: destination created during the final rename restores the backup and fails\n'
 
+# mv -n exits 1 and leaves the source when dest already contains NGMBridge.app.
+# The installer must not move that existing app into staging.
+rm -rf "$DEST"
+rm -f "$FIXTURE_OPEN_LOG"
+mkdir -p "$DEST"
+printf 'preserve existing install\n' > "$DEST/preserve-marker"
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+source_path=""
+target_path=""
+for arg in "$@"; do
+    case "$arg" in
+        -*)
+            continue
+            ;;
+        *)
+            if [[ -z "$source_path" ]]; then
+                source_path="$arg"
+            else
+                target_path="$arg"
+            fi
+            ;;
+    esac
+done
+if [[ "$target_path" == "$DEST" && "$source_path" == *'/NGMBridge.app' && "$source_path" != *'/previous.app' ]]; then
+    mkdir -p "$DEST/NGMBridge.app"
+    printf 'competitor\n' > "$DEST/NGMBridge.app/marker"
+    exit 1
+fi
+exec /bin/mv "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/mv"
+compete_status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/compete.stdout" 2> "$TEMP/compete.stderr" || compete_status=$?
+[[ "$compete_status" -ne 0 ]]
+[[ ! -s "$TEMP/compete.stdout" ]]
+[[ "$(cat "$DEST/preserve-marker")" == "preserve existing install" ]]
+competitor="$(find "$HOME/Applications" -name marker -print)"
+[[ -n "$competitor" ]]
+[[ "$(cat "$competitor")" == "competitor" ]]
+[[ ! -e "$FIXTURE_OPEN_LOG" ]]
+printf 'PASS: refusing mv -n does not take an existing NGMBridge.app out of the destination\n'
+
 rm -f "$FIXTURE_ROOT/bin/mv"
 rm -rf "$DEST"
 find "$HOME/Applications" -maxdepth 1 -name '.NGMBridge-displaced.*' -exec rm -rf {} +
 mkdir -p "$HOME/Applications/.NGMBridge-install.orphan/previous.app"
+printf 'keep-backup\n' > "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker"
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+source_path=""
+target_path=""
+for arg in "$@"; do
+    case "$arg" in
+        -*)
+            continue
+            ;;
+        *)
+            if [[ -z "$source_path" ]]; then
+                source_path="$arg"
+            else
+                target_path="$arg"
+            fi
+            ;;
+    esac
+done
+if [[ "$source_path" == *'/previous.app' && "$target_path" == "$DEST" ]]; then
+    mkdir -p "$DEST"
+fi
+exec /bin/mv "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/mv"
+keep_status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/keep.stdout" 2> "$TEMP/keep.stderr" || keep_status=$?
+[[ "$keep_status" -eq 0 ]]
+[[ "$(cat "$TEMP/keep.stdout")" == "Installed: $DEST" ]]
+[[ -f "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker" ]]
+[[ "$(cat "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker")" == "keep-backup" ]]
+[[ ! -e "$DEST/previous.app" ]]
+[[ -f "$DEST/Contents/MacOS/NGMBridge" ]]
+printf 'PASS: a destination that appears before restore does not swallow the backup\n'
+
+rm -f "$FIXTURE_ROOT/bin/mv"
+rm -rf "$DEST" "$HOME/Applications/.NGMBridge-install.orphan"
+find "$HOME/Applications" -maxdepth 1 -name '.NGMBridge-displaced.*' -exec rm -rf {} +
+mkdir -p "$HOME/Applications/.NGMBridge-install.orphan/previous.app"
 printf 'orphan backup\n' > "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker"
+rm -f "$FIXTURE_OPEN_LOG"
 export FIXTURE_BUILD_STATUS=42
 orphan_status=0
 bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/orphan.stdout" 2> "$TEMP/orphan.stderr" || orphan_status=$?

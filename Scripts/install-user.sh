@@ -6,58 +6,14 @@ DEST="$HOME/Applications/NGMBridge.app"
 STAGING=""
 INCOMING=""
 INCOMING_DIR=""
-LOCK=""
 LOCK_HELD=0
-LOCK_TOKEN=""
 LOCK_WAIT_LOGGED=0
 INSTALLED=0
 CLEANED=0
 
-# Identity is the pid plus its start time. kill -0 is true for any live
-# process that reused the pid, including a later installer, and the wait
-# path would then block forever.
-process_start() {
-    local pid="$1"
-    local token=""
-    token="$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null | tr -s '[:space:]' ' ' || true)"
-    token="${token#"${token%%[![:space:]]*}"}"
-    token="${token%"${token##*[![:space:]]}"}"
-    printf '%s' "$token"
-}
-
-identity_live() {
-    local pid="$1"
-    local expected="$2"
-    local actual=""
-    [[ "$pid" =~ ^[0-9]+$ && -n "$expected" ]] || return 1
-    actual="$(process_start "$pid")"
-    [[ -n "$actual" && "$actual" == "$expected" ]]
-}
-
-command_is_installer() {
-    local pid="$1"
-    local cmd=""
-    [[ "$pid" =~ ^[0-9]+$ && "$pid" != "$$" ]] || return 1
-    cmd="$(LC_ALL=C ps -p "$pid" -o command= 2>/dev/null || true)"
-    [[ "$cmd" == *install-user.sh* ]]
-}
-
-still_hold_lock() {
-    local pid=""
-    local token=""
-    [[ "$LOCK_HELD" == 1 && -d "$LOCK" ]] || return 1
-    pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
-    token="$(cat "$LOCK/started" 2>/dev/null || true)"
-    [[ "$pid" == "$$" && -n "$LOCK_TOKEN" && "$token" == "$LOCK_TOKEN" ]]
-}
-
-require_lock() {
-    if still_hold_lock; then
-        return 0
-    fi
-    printf 'Lost the install lock.\n' >&2
-    exit 1
-}
+# Advisory lock on one stable file. The file is never renamed, so two waiters
+# cannot both decide the lock is stale and move a live owner's lock aside.
+LOCK_FILE=""
 
 note_lock_wait() {
     if [[ -n "${NGMBRIDGE_INSTALL_LOCK_WAIT_LOG:-}" && "$LOCK_WAIT_LOGGED" != 1 ]]; then
@@ -66,115 +22,137 @@ note_lock_wait() {
     fi
 }
 
-# mkdir is the atomic claim. A directory we just created has no pid yet;
-# leave it alone briefly so the owner can publish its identity. Never delete
-# a renamed lock whose recorded process is still that same start time.
-acquire_lock() {
-    local pid=""
-    local token=""
-    local stale=""
-    local unknown=0
-    local age=0
-    local now=0
-    local mtime=0
-    LOCK="$HOME/Applications/.NGMBridge-install.lock"
-    while true; do
-        if mkdir "$LOCK" 2>/dev/null; then
-            printf '%s\n' "$$" > "$LOCK/pid" || true
-            LOCK_TOKEN="$(process_start "$$")"
-            if [[ -n "$LOCK_TOKEN" ]]; then
-                printf '%s\n' "$LOCK_TOKEN" > "$LOCK/started" || true
-            fi
-            pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
-            token="$(cat "$LOCK/started" 2>/dev/null || true)"
-            if [[ "$pid" == "$$" && -n "$LOCK_TOKEN" && "$token" == "$LOCK_TOKEN" ]]; then
-                LOCK_HELD=1
-                return 0
-            fi
-            if [[ "$(cat "$LOCK/pid" 2>/dev/null || true)" == "$$" ]]; then
-                rm -rf "$LOCK"
-            fi
-            printf 'Could not record the install lock identity.\n' >&2
-            return 1
-        fi
-        if [[ -L "$LOCK" ]]; then
-            pid="$(readlink "$LOCK" 2>/dev/null || true)"
-            if command_is_installer "$pid"; then
-                note_lock_wait
-                sleep 0.1
-                continue
-            fi
-            rm -f "$LOCK" || true
-            if [[ -L "$LOCK" ]]; then
-                unknown=$((unknown + 1))
-                if [[ "$unknown" -ge 600 ]]; then
-                    break
-                fi
-                sleep 0.1
-            fi
-            continue
-        fi
-        if [[ -d "$LOCK" ]]; then
-            pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
-            token="$(cat "$LOCK/started" 2>/dev/null || true)"
-            if identity_live "$pid" "$token"; then
-                note_lock_wait
-                sleep 0.1
-                continue
-            fi
-            if [[ ! -f "$LOCK/pid" ]]; then
-                now="$(date +%s)"
-                mtime="$(date -r "$LOCK" +%s 2>/dev/null || printf '0')"
-                age=$((now - mtime))
-                if [[ "$age" -lt 3 ]]; then
-                    sleep 0.1
-                    unknown=$((unknown + 1))
-                    if [[ "$unknown" -ge 600 ]]; then
-                        break
-                    fi
-                    continue
-                fi
-            fi
-            stale="$LOCK.stale.$$.$unknown"
-            if mv "$LOCK" "$stale" 2>/dev/null; then
-                pid="$(cat "$stale/pid" 2>/dev/null || true)"
-                token="$(cat "$stale/started" 2>/dev/null || true)"
-                if identity_live "$pid" "$token"; then
-                    if ! mv "$stale" "$LOCK" 2>/dev/null; then
-                        printf 'Live install lock moved aside at: %s\n' "$stale" >&2
-                        sleep 0.1
-                    fi
-                else
-                    rm -rf "$stale"
-                fi
-                continue
-            fi
-        fi
-        unknown=$((unknown + 1))
-        if [[ "$unknown" -ge 600 ]]; then
-            break
-        fi
-        sleep 0.1
-    done
-    printf 'Timed out waiting for another NGMBridge installer to finish.\n' >&2
+lock_fd() {
+    if command -v flock >/dev/null 2>&1; then
+        flock 9
+        return $?
+    fi
+    if command -v perl >/dev/null 2>&1; then
+        # flock(2) is tied to the open file description. Perl locks bash's fd 9
+        # and exits; the lock stays until this shell closes fd 9.
+        perl -e 'use Fcntl qw(:flock); open(my $fh, ">>&", 9) or die $!; flock($fh, LOCK_EX) or die $!;'
+        return $?
+    fi
+    printf 'Need flock or perl to take the install lock.\n' >&2
     return 1
 }
 
+acquire_lock() {
+    local legacy=""
+    legacy="$HOME/Applications/.NGMBridge-install.lock"
+    if [[ -L "$legacy" || -d "$legacy" ]]; then
+        rm -rf "$legacy" || true
+    fi
+    LOCK_FILE="$HOME/Applications/.NGMBridge-install-lock"
+    exec 9>>"$LOCK_FILE" || return 1
+    note_lock_wait
+    if ! lock_fd; then
+        exec 9>&- || true
+        return 1
+    fi
+    LOCK_HELD=1
+    return 0
+}
+
+require_lock() {
+    if [[ "$LOCK_HELD" == 1 ]]; then
+        return 0
+    fi
+    printf 'Lost the install lock.\n' >&2
+    exit 1
+}
+
 release_lock() {
-    local pid=""
-    local token=""
-    if [[ "$LOCK_HELD" != 1 || -z "$LOCK" ]]; then
+    if [[ "$LOCK_HELD" != 1 ]]; then
         LOCK_HELD=0
         return 0
     fi
-    if [[ -d "$LOCK" ]]; then
-        pid="$(cat "$LOCK/pid" 2>/dev/null || true)"
-        token="$(cat "$LOCK/started" 2>/dev/null || true)"
-        if [[ "$pid" == "$$" && "$token" == "$LOCK_TOKEN" ]]; then
-            rm -rf "$LOCK"
-        fi
-    fi
+    exec 9>&- || true
     LOCK_HELD=0
+}
+
+# Rename src onto dest. Fail, leaving src in place, when dest exists.
+# GNU mv -nT does this. macOS mv has no -T and mv -n still nests into a directory.
+RENAMER=""
+rename_noreplace() {
+    local src="$1"
+    local dest="$2"
+    local err=""
+    local status=0
+    local base=""
+    err="$(mv -nT "$src" "$dest" 2>&1)" && return 0
+    status=$?
+    if [[ ! -e "$src" && ! -L "$src" ]]; then
+        base="${src##*/}"
+        if [[ -e "$dest/$base" || -L "$dest/$base" ]]; then
+            mv "$dest/$base" "$src" || true
+        fi
+        return "$status"
+    fi
+    case "$err" in
+        *illegal\ option*|*invalid\ option*|*unrecognized\ option*)
+            rename_noreplace_fallback "$src" "$dest"
+            return $?
+            ;;
+    esac
+    return "$status"
+}
+
+rename_noreplace_fallback() {
+    local src="$1"
+    local dest="$2"
+    local compiler=""
+    local source=""
+    if [[ -z "$RENAMER" ]]; then
+        compiler="$(command -v clang || true)"
+        if [[ -z "$compiler" ]]; then
+            compiler="$(command -v cc || true)"
+        fi
+        if [[ -z "$compiler" ]]; then
+            printf 'Cannot rename exclusively without mv -T or a C compiler.\n' >&2
+            return 1
+        fi
+        RENAMER="$(mktemp)"
+        source="$(mktemp)"
+        cat > "$source" <<'EOF'
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#if defined(__APPLE__)
+int renamex_np(const char *from, const char *to, unsigned int flags);
+#ifndef RENAME_EXCL
+#define RENAME_EXCL 0x00000004u
+#endif
+#else
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE (1u << 0)
+#endif
+#endif
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        return 2;
+    }
+#if defined(__APPLE__)
+    if (renamex_np(argv[1], argv[2], RENAME_EXCL) != 0) {
+#else
+    if (renameat2(AT_FDCWD, argv[1], AT_FDCWD, argv[2], RENAME_NOREPLACE) != 0) {
+#endif
+        fprintf(stderr, "rename: %s\n", strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+EOF
+        if ! "$compiler" -O2 -o "$RENAMER" "$source"; then
+            rm -f "$source" "$RENAMER"
+            RENAMER=""
+            return 1
+        fi
+        rm -f "$source"
+    fi
+    "$RENAMER" "$src" "$dest"
 }
 
 # A killed installer can leave the only copy of the previous app in staging.
@@ -186,7 +164,7 @@ recover_orphaned_backup() {
     shopt -s nullglob
     for dir in "$HOME/Applications"/.NGMBridge-install.*; do
         base="${dir##*/}"
-        if [[ "$dir" == "$LOCK" || "$base" == .NGMBridge-install.lock ]]; then
+        if [[ "$base" == .NGMBridge-install.lock ]]; then
             continue
         fi
         case "$base" in
@@ -201,7 +179,7 @@ recover_orphaned_backup() {
         esac
         previous="$dir/previous.app"
         if [[ ! -e "$DEST" && ! -L "$DEST" && ( -e "$previous" || -L "$previous" ) ]]; then
-            if mv "$previous" "$DEST"; then
+            if rename_noreplace "$previous" "$DEST"; then
                 printf 'Restored an interrupted installation to: %s\n' "$DEST" >&2
             fi
         fi
@@ -220,7 +198,7 @@ move_into_place() {
     local dest="$2"
     local base=""
     local nested=""
-    INCOMING_DIR="$(mktemp -d "$HOME/Applications/.NGMBridge-install.incoming.XXXXXX")"
+    INCOMING_DIR="$(mktemp -d "$HOME/Applications/.NGMBridge-install.incoming.XXXXXX")" || return $?
     INCOMING="$INCOMING_DIR/NGMBridge.app"
     mv "$src" "$INCOMING" || return $?
     if [[ -e "$dest" || -L "$dest" ]]; then
@@ -229,16 +207,17 @@ move_into_place() {
         return 1
     fi
     mv -n "$INCOMING" "$dest" || true
+    # mv -n refuses when dest already contains this leaf, and leaves our
+    # source in place. That existing leaf belongs to someone else.
+    if [[ -e "$INCOMING" || -L "$INCOMING" ]]; then
+        printf 'Destination already exists: %s\n' "$dest" >&2
+        return 1
+    fi
     base="${INCOMING##*/}"
     nested="$dest/$base"
     if [[ -e "$nested" || -L "$nested" ]]; then
         mv "$nested" "$src" || true
         printf 'Refusing to nest the new app inside %s\n' "$dest" >&2
-        return 1
-    fi
-    if [[ -e "$INCOMING" || -L "$INCOMING" ]]; then
-        mv "$INCOMING" "$src" || true
-        printf 'Destination already exists: %s\n' "$dest" >&2
         return 1
     fi
     if [[ ! -e "$dest" && ! -L "$dest" ]]; then
@@ -273,9 +252,7 @@ restore_previous() {
         fi
         printf 'Unexpected destination retained at: %s\n' "$displaced" >&2
     fi
-    mv "$STAGING/previous.app" "$DEST" || return 1
-    if [[ -e "$DEST/previous.app" || -L "$DEST/previous.app" ]]; then
-        mv "$DEST/previous.app" "$STAGING/previous.app" || true
+    if ! rename_noreplace "$STAGING/previous.app" "$DEST"; then
         return 1
     fi
     if [[ ! -e "$DEST" && ! -L "$DEST" ]]; then
