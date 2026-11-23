@@ -8,8 +8,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMP="$(mktemp -d)"
 pid_a=""
 pid_b=""
+owner_pid=""
 cleanup_test() {
     status=$?
+    if [[ -n "$owner_pid" ]]; then
+        kill "$owner_pid" 2>/dev/null || true
+        wait "$owner_pid" 2>/dev/null || true
+    fi
     if [[ -n "$pid_a" ]]; then
         kill "$pid_a" 2>/dev/null || true
         wait "$pid_a" 2>/dev/null || true
@@ -342,8 +347,103 @@ pid_a=""
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 printf 'PASS: SIGTERM during the staged copy releases the lock and keeps the installed app\n'
 
-rm -f "$CP_ENTERED" "$CP_RELEASE"
+rm -f "$CP_ENTERED" "$CP_RELEASE" "$FIXTURE_ROOT/bin/cp"
 unset NGMBRIDGE_INSTALL_LOCK_WAIT_LOG || true
+
+mkdir -p "$HOME/Applications/.NGMBridge-install.backup"
+printf 'user notes\n' > "$HOME/Applications/.NGMBridge-install.backup/notes"
+mkdir -p "$HOME/Applications/.NGMBridge-install.a1b2c3/NGMBridge.app"
+printf 'partial temp\n' > "$HOME/Applications/.NGMBridge-install.a1b2c3/NGMBridge.app/partial"
+rm -f "$FIXTURE_OPEN_LOG"
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/userdata.stdout" 2> "$TEMP/userdata.stderr"
+[[ "$(cat "$HOME/Applications/.NGMBridge-install.backup/notes")" == "user notes" ]]
+[[ ! -e "$HOME/Applications/.NGMBridge-install.a1b2c3" ]]
+rm -rf "$HOME/Applications/.NGMBridge-install.backup"
+printf 'PASS: recovery removes installer temp dirs and keeps .NGMBridge-install.backup\n'
+
+holder="$TEMP/holder/install-user.sh"
+mkdir -p "$TEMP/holder"
+printf '#!/bin/bash\nsleep 30\n' > "$holder"
+bash "$holder" &
+owner_pid=$!
+ln -s "$owner_pid" "$HOME/Applications/.NGMBridge-install.lock"
+rm -f "$FIXTURE_OPEN_LOG"
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/legacy.stdout" 2> "$TEMP/legacy.stderr" &
+pid_a=$!
+seen_owner=0
+ticks=0
+while [[ "$ticks" -lt 40 ]]; do
+    if [[ ! -L "$HOME/Applications/.NGMBridge-install.lock" || "$(readlink "$HOME/Applications/.NGMBridge-install.lock")" != "$owner_pid" ]]; then
+        printf 'legacy lock was removed while its owner was live\n' >&2
+        exit 1
+    fi
+    if LC_ALL=C ps -p "$pid_a" -o command= | grep -q install-user.sh; then
+        seen_owner=1
+        sleep 0.2
+        if [[ "$(readlink "$HOME/Applications/.NGMBridge-install.lock")" != "$owner_pid" ]]; then
+            printf 'legacy lock was removed while its owner was live\n' >&2
+            exit 1
+        fi
+        break
+    fi
+    sleep 0.05
+    ticks=$((ticks + 1))
+done
+[[ "$seen_owner" == 1 ]]
+kill "$owner_pid" 2>/dev/null || true
+wait "$owner_pid" 2>/dev/null || true
+owner_pid=""
+legacy_status=0
+wait_pid "$pid_a" || legacy_status=$?
+pid_a=""
+[[ "$legacy_status" -eq 0 ]]
+[[ ! -e "$HOME/Applications/.NGMBridge-install.lock" ]]
+[[ "$(cat "$TEMP/legacy.stdout")" == "Installed: $DEST" ]]
+printf 'PASS: a live legacy lock owner is not removed\n'
+
+compiler=""
+if command -v clang >/dev/null 2>&1; then
+    compiler=clang
+elif command -v cc >/dev/null 2>&1; then
+    compiler=cc
+fi
+[[ -n "$compiler" ]]
+"$compiler" --version >&2 || true
+suffixless="$(mktemp)"
+printf 'int main(void) { return 0; }\n' > "$suffixless"
+if "$compiler" -O2 -o "$suffixless.out" "$suffixless" >/dev/null 2>&1; then
+    printf 'suffixless compile unexpectedly succeeded\n' >&2
+    exit 1
+fi
+"$compiler" -x c -O2 -o "$suffixless.out" "$suffixless"
+[[ -x "$suffixless.out" ]]
+rm -rf "$DEST"
+mkdir -p "$HOME/Applications/.NGMBridge-install.orphan/previous.app"
+printf 'compiled restore\n' > "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker"
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+for arg in "$@"; do
+    case "$arg" in
+        -nT|-T)
+            printf 'mv: illegal option -- T\n' >&2
+            exit 1
+            ;;
+    esac
+done
+exec /bin/mv "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/mv"
+export FIXTURE_BUILD_STATUS=42
+compile_status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/compile.stdout" 2> "$TEMP/compile.stderr" || compile_status=$?
+unset FIXTURE_BUILD_STATUS
+rm -f "$FIXTURE_ROOT/bin/mv"
+[[ "$compile_status" -eq 42 ]]
+[[ "$(cat "$DEST/preserve-marker")" == "compiled restore" ]]
+[[ ! -e "$HOME/Applications/.NGMBridge-install.orphan" ]]
+printf 'PASS: exclusive rename compiles with -x c when mv -T is unavailable\n'
+
 export CP_ENTERED="$TEMP/cp.entered"
 export CP_RELEASE="$TEMP/cp.release"
 export NGMBRIDGE_INSTALL_LOCK_WAIT_LOG="$TEMP/lock-wait"

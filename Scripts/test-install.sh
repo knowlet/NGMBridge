@@ -49,6 +49,7 @@ cmp "$FIXTURE_ROOT/.build/bin/NGMBridge" "$APP/Contents/MacOS/NGMBridge"
 printf 'PASS: build stdout contains only the app path\n'
 
 DEST="$HOME/Applications/NGMBridge.app"
+export DEST
 mkdir -p "$DEST"
 printf 'old install\n' > "$DEST/old-marker"
 bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/install.stdout" 2> "$TEMP/install.stderr"
@@ -106,10 +107,31 @@ printf 'PASS: failed first copy leaves no installed fixture\n'
 rm "$FIXTURE_ROOT/bin/cp"
 mkdir -p "$DEST"
 printf 'preserve existing install\n' > "$DEST/preserve-marker"
+export FIXTURE_FINAL_MOVE="$TEMP/final-move.hit"
+rm -f "$FIXTURE_FINAL_MOVE"
 cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
 #!/bin/bash
 set -euo pipefail
-if [[ "$1" == *'/.NGMBridge-install.'*'/NGMBridge.app' ]]; then
+source_path=""
+target_path=""
+for arg in "$@"; do
+    case "$arg" in
+        -*)
+            continue
+            ;;
+        *)
+            if [[ -z "$source_path" ]]; then
+                source_path="$arg"
+            else
+                target_path="$arg"
+            fi
+            ;;
+    esac
+done
+# The final publish is the incoming bundle moved onto the installed path.
+# The earlier staging-to-incoming rename must not count.
+if [[ "$source_path" == *'/.NGMBridge-install.incoming.'*'/NGMBridge.app' && "$target_path" == "$DEST" ]]; then
+    printf 'hit\n' >> "$FIXTURE_FINAL_MOVE"
     exit 44
 fi
 exec /bin/mv "$@"
@@ -118,14 +140,17 @@ chmod +x "$FIXTURE_ROOT/bin/mv"
 status=0
 bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/move-failure.stdout" 2> "$TEMP/move-failure.stderr" || status=$?
 [[ "$status" == 44 ]]
+[[ -s "$FIXTURE_FINAL_MOVE" ]]
 [[ -f "$DEST/preserve-marker" ]]
 [[ ! -e "$FIXTURE_OPEN_LOG" ]]
 printf 'PASS: final move failure preserves existing installation\n'
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 rm -rf "$DEST"
+rm -f "$FIXTURE_FINAL_MOVE"
 status=0
 bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/first-move.stdout" 2> "$TEMP/first-move.stderr" || status=$?
 [[ "$status" == 44 && ! -e "$DEST" && ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -s "$FIXTURE_FINAL_MOVE" ]]
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 printf 'PASS: first-install move failure cleans staging\n'
 
