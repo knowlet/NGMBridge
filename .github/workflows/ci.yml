@@ -21,5 +21,7 @@ jobs:
         run: swift test
       - name: Test installer scripts
         run: bash ./Scripts/test-install.sh
+      - name: Test installer race
+        run: bash ./Scripts/test-install-race.sh
       - name: Build app bundle
         run: bash ./Scripts/build-app.sh
