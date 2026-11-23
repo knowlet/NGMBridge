@@ -79,26 +79,94 @@ lock_fd() {
     return 1
 }
 
+# Publish pid and start time in one rename so an older installer never sees a
+# half-written directory and treats it as stale. Held until this install exits.
+LEGACY_LOCK=""
+LEGACY_TOKEN=""
+
+publish_legacy_lock() {
+    local legacy="$1"
+    local tmp=""
+    LEGACY_TOKEN="$(process_start "$$")"
+    if [[ -z "$LEGACY_TOKEN" ]]; then
+        printf 'Could not read the installer start time.\n' >&2
+        return 1
+    fi
+    tmp="$(mktemp -d "$HOME/Applications/.NGMBridge-legacy.XXXXXX")" || return 1
+    printf '%s\n' "$$" > "$tmp/pid" || { rm -rf "$tmp"; return 1; }
+    printf '%s\n' "$LEGACY_TOKEN" > "$tmp/started" || { rm -rf "$tmp"; return 1; }
+    # Use the real mv. A test stub on PATH must not block lock publication.
+    if /bin/mv -nT "$tmp" "$legacy" 2>/dev/null; then
+        LEGACY_LOCK="$legacy"
+        return 0
+    fi
+    if [[ -e "$tmp" || -L "$tmp" ]]; then
+        if [[ ! -e "$legacy" && ! -L "$legacy" ]]; then
+            if /bin/mv "$tmp" "$legacy"; then
+                LEGACY_LOCK="$legacy"
+                return 0
+            fi
+        fi
+        rm -rf "$tmp" || true
+    fi
+    return 1
+}
+
+release_legacy_lock() {
+    local legacy="$HOME/Applications/.NGMBridge-install.lock"
+    local pid=""
+    local token=""
+    if [[ -z "$LEGACY_LOCK" ]]; then
+        return 0
+    fi
+    if [[ -d "$legacy" && ! -L "$legacy" ]]; then
+        pid="$(cat "$legacy/pid" 2>/dev/null || true)"
+        token="$(cat "$legacy/started" 2>/dev/null || true)"
+        if [[ "$pid" == "$$" && "$token" == "$LEGACY_TOKEN" ]]; then
+            rm -rf "$legacy" || true
+        fi
+    fi
+    LEGACY_LOCK=""
+}
+
 acquire_lock() {
     local legacy=""
+    local misses=0
     legacy="$HOME/Applications/.NGMBridge-install.lock"
-    while [[ -L "$legacy" || -d "$legacy" ]]; do
-        if legacy_owner_alive "$legacy"; then
-            sleep 0.1
+    while true; do
+        if [[ -L "$legacy" || -d "$legacy" ]]; then
+            misses=0
+            if legacy_owner_alive "$legacy"; then
+                sleep 0.1
+                continue
+            fi
+            rm -rf "$legacy" || true
+            if [[ -L "$legacy" || -d "$legacy" ]]; then
+                printf 'Could not remove a stale legacy install lock: %s\n' "$legacy" >&2
+                return 1
+            fi
             continue
         fi
-        rm -rf "$legacy" || true
-        if [[ -L "$legacy" || -d "$legacy" ]]; then
-            printf 'Could not remove a stale legacy install lock: %s\n' "$legacy" >&2
+        if publish_legacy_lock "$legacy"; then
+            break
+        fi
+        misses=$((misses + 1))
+        if [[ "$misses" -ge 50 ]]; then
+            printf 'Could not publish the legacy install lock.\n' >&2
             return 1
         fi
+        sleep 0.05
     done
     LOCK_FILE="$HOME/Applications/.NGMBridge-install-lock"
-    exec 9>>"$LOCK_FILE" || return 1
+    if ! exec 9>>"$LOCK_FILE"; then
+        release_legacy_lock
+        return 1
+    fi
     if ! lock_fd nonblock; then
         note_lock_wait
         if ! lock_fd block; then
             exec 9>&- || true
+            release_legacy_lock
             return 1
         fi
     fi
@@ -115,6 +183,7 @@ require_lock() {
 }
 
 release_lock() {
+    release_legacy_lock
     if [[ "$LOCK_HELD" != 1 ]]; then
         LOCK_HELD=0
         return 0
@@ -273,22 +342,24 @@ recover_orphaned_backup() {
     local verified=0
     shopt -s nullglob
     for dir in "$HOME/Applications"/.NGMBridge-install.*; do
+        # A symlink can point at a directory outside Applications. Never follow it.
+        if [[ -L "$dir" || ! -d "$dir" ]]; then
+            continue
+        fi
         base="${dir##*/}"
         verified=0
-        if incoming_temp_name "$base"; then
-            if installer_payload_only "$dir" "NGMBridge.app"; then
+        if [[ -f "$dir/.ngmbridge-installer" && ! -L "$dir/.ngmbridge-installer" ]]; then
+            if incoming_temp_name "$base" && installer_payload_only "$dir" "NGMBridge.app:.ngmbridge-installer"; then
                 rm -rf "$dir" || true
+                continue
             fi
-            continue
-        fi
-        if stale_lock_temp_name "$base"; then
-            if installer_payload_only "$dir" "pid:started"; then
+            if stale_lock_temp_name "$base" && installer_payload_only "$dir" "pid:started:.ngmbridge-installer"; then
                 rm -rf "$dir" || true
+                continue
             fi
-            continue
-        fi
-        if staging_temp_name "$base" && installer_payload_only "$dir" "NGMBridge.app:previous.app"; then
-            verified=1
+            if staging_temp_name "$base" && installer_payload_only "$dir" "NGMBridge.app:previous.app:.ngmbridge-installer"; then
+                verified=1
+            fi
         fi
         previous="$dir/previous.app"
         if [[ "$verified" == 1 && ! -e "$DEST" && ! -L "$DEST" && ( -e "$previous" || -L "$previous" ) ]]; then
@@ -312,6 +383,7 @@ move_into_place() {
     local base=""
     local nested=""
     INCOMING_DIR="$(mktemp -d "$HOME/Applications/.NGMBridge-install.incoming.XXXXXX")" || return $?
+    : > "$INCOMING_DIR/.ngmbridge-installer" || return $?
     INCOMING="$INCOMING_DIR/NGMBridge.app"
     mv "$src" "$INCOMING" || return $?
     if [[ -e "$dest" || -L "$dest" ]]; then
@@ -449,6 +521,7 @@ require_lock
 # Finish copying before removing a working installation. Keep staging on the
 # destination filesystem so the final move does not copy the bundle again.
 STAGING="$(mktemp -d "$HOME/Applications/.NGMBridge-install.XXXXXX")"
+: > "$STAGING/.ngmbridge-installer"
 cp -R "$APP" "$STAGING/NGMBridge.app"
 require_lock
 if [[ -e "$DEST" || -L "$DEST" ]]; then

@@ -17,10 +17,16 @@ cleanup_test() {
     fi
     if [[ -n "$pid_a" ]]; then
         kill "$pid_a" 2>/dev/null || true
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -TERM -P "$pid_a" 2>/dev/null || true
+        fi
         wait "$pid_a" 2>/dev/null || true
     fi
     if [[ -n "$pid_b" ]]; then
         kill "$pid_b" 2>/dev/null || true
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -TERM -P "$pid_b" 2>/dev/null || true
+        fi
         wait "$pid_b" 2>/dev/null || true
     fi
     rm -rf "$TEMP"
@@ -263,6 +269,7 @@ rm -rf "$DEST" "$HOME/Applications/.NGMBridge-install.orphan"
 find "$HOME/Applications" -maxdepth 1 -name '.NGMBridge-displaced.*' -exec rm -rf {} +
 mkdir -p "$HOME/Applications/.NGMBridge-install.orphan/previous.app"
 printf 'orphan backup\n' > "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker"
+: > "$HOME/Applications/.NGMBridge-install.orphan/.ngmbridge-installer"
 rm -f "$FIXTURE_OPEN_LOG"
 export FIXTURE_BUILD_STATUS=42
 orphan_status=0
@@ -350,16 +357,34 @@ printf 'PASS: SIGTERM during the staged copy releases the lock and keeps the ins
 rm -f "$CP_ENTERED" "$CP_RELEASE" "$FIXTURE_ROOT/bin/cp"
 unset NGMBRIDGE_INSTALL_LOCK_WAIT_LOG || true
 
-mkdir -p "$HOME/Applications/.NGMBridge-install.backup"
-printf 'user notes\n' > "$HOME/Applications/.NGMBridge-install.backup/notes"
+mkdir -p "$HOME/Applications/.NGMBridge-install.backup/NGMBridge.app"
+printf 'user app\n' > "$HOME/Applications/.NGMBridge-install.backup/NGMBridge.app/keep"
 mkdir -p "$HOME/Applications/.NGMBridge-install.a1b2c3/NGMBridge.app"
 printf 'partial temp\n' > "$HOME/Applications/.NGMBridge-install.a1b2c3/NGMBridge.app/partial"
+: > "$HOME/Applications/.NGMBridge-install.a1b2c3/.ngmbridge-installer"
 rm -f "$FIXTURE_OPEN_LOG"
 bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/userdata.stdout" 2> "$TEMP/userdata.stderr"
-[[ "$(cat "$HOME/Applications/.NGMBridge-install.backup/notes")" == "user notes" ]]
+[[ "$(cat "$HOME/Applications/.NGMBridge-install.backup/NGMBridge.app/keep")" == "user app" ]]
 [[ ! -e "$HOME/Applications/.NGMBridge-install.a1b2c3" ]]
 rm -rf "$HOME/Applications/.NGMBridge-install.backup"
-printf 'PASS: recovery removes installer temp dirs and keeps .NGMBridge-install.backup\n'
+printf 'PASS: recovery removes marked installer temps and keeps a backup that only contains NGMBridge.app\n'
+
+link_target="$(mktemp -d)"
+mkdir -p "$link_target/previous.app"
+printf 'linked backup\n' > "$link_target/previous.app/preserve-marker"
+ln -s "$link_target" "$HOME/Applications/.NGMBridge-install.abcdef"
+rm -rf "$DEST"
+rm -f "$FIXTURE_OPEN_LOG"
+export FIXTURE_BUILD_STATUS=42
+link_status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/link.stdout" 2> "$TEMP/link.stderr" || link_status=$?
+unset FIXTURE_BUILD_STATUS
+[[ "$link_status" -eq 42 ]]
+[[ "$(cat "$link_target/previous.app/preserve-marker")" == "linked backup" ]]
+[[ ! -e "$DEST" ]]
+rm -f "$HOME/Applications/.NGMBridge-install.abcdef"
+rm -rf "$link_target"
+printf 'PASS: recovery does not follow a symlinked staging directory\n'
 
 holder="$TEMP/holder/install-user.sh"
 mkdir -p "$TEMP/holder"
@@ -420,6 +445,7 @@ fi
 rm -rf "$DEST"
 mkdir -p "$HOME/Applications/.NGMBridge-install.orphan/previous.app"
 printf 'compiled restore\n' > "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker"
+: > "$HOME/Applications/.NGMBridge-install.orphan/.ngmbridge-installer"
 cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
 #!/bin/bash
 set -euo pipefail
@@ -480,17 +506,26 @@ if [[ "$reached" != 1 ]]; then
     cat "$TEMP/a.stderr" >&2 || true
     exit 1
 fi
+[[ -d "$HOME/Applications/.NGMBridge-install.lock" ]]
+[[ ! -L "$HOME/Applications/.NGMBridge-install.lock" ]]
+[[ "$(cat "$HOME/Applications/.NGMBridge-install.lock/pid")" == "$pid_a" ]]
+if mkdir "$HOME/Applications/.NGMBridge-install.lock" 2>/dev/null; then
+    printf 'legacy mkdir lock was available while the new installer held it\n' >&2
+    exit 1
+fi
+printf 'PASS: a new installer holds the legacy directory lock before another installer can mkdir it\n'
 bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/b.stdout" 2> "$TEMP/b.stderr" &
 pid_b=$!
-waited=0
+# The first installer already holds the legacy directory lock, so the second
+# waits there and must not attempt flock or copy yet.
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
     21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 \
     41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 \
     61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 \
     81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100; do
     if [[ -f "$NGMBRIDGE_INSTALL_LOCK_WAIT_LOG" ]] && grep -qx "$pid_b" "$NGMBRIDGE_INSTALL_LOCK_WAIT_LOG"; then
-        waited=1
-        break
+        printf 'second installer logged a flock wait before attempting flock\n' >&2
+        exit 1
     fi
     cp_lines="$(wc -l < "$CP_ENTERED" | tr -d '[:space:]')"
     if [[ "$cp_lines" != 1 ]]; then
@@ -498,13 +533,16 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
         exit 1
     fi
     if ! kill -0 "$pid_b" 2>/dev/null; then
-        break
+        printf 'second installer exited while the first still held the legacy lock\n' >&2
+        cat "$TEMP/b.stdout" >&2 || true
+        cat "$TEMP/b.stderr" >&2 || true
+        exit 1
     fi
     sleep 0.05
 done
-[[ "$waited" == 1 ]]
 cp_lines="$(wc -l < "$CP_ENTERED" | tr -d '[:space:]')"
 [[ "$cp_lines" == 1 ]]
+kill -0 "$pid_b"
 printf 'go\n' > "$CP_RELEASE"
 status_a=0
 status_b=0
@@ -522,3 +560,37 @@ cp_lines="$(wc -l < "$CP_ENTERED" | tr -d '[:space:]')"
 [[ "$cp_lines" == 2 ]]
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 printf 'PASS: overlapping installers take the lock one at a time and do not nest\n'
+
+rm -f "$FIXTURE_ROOT/bin/cp" "$NGMBRIDGE_INSTALL_LOCK_WAIT_LOG" "$FIXTURE_OPEN_LOG"
+exec 8>>"$HOME/Applications/.NGMBridge-install-lock"
+flock 8
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/flock.stdout" 2> "$TEMP/flock.stderr" &
+pid_a=$!
+logged=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
+    21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 \
+    41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 \
+    61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 \
+    81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 100; do
+    if [[ -f "$NGMBRIDGE_INSTALL_LOCK_WAIT_LOG" ]] && grep -qx "$pid_a" "$NGMBRIDGE_INSTALL_LOCK_WAIT_LOG"; then
+        logged=1
+        break
+    fi
+    if ! kill -0 "$pid_a" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
+done
+[[ "$logged" == 1 ]]
+[[ ! -s "$TEMP/flock.stdout" ]]
+[[ -d "$HOME/Applications/.NGMBridge-install.lock" ]]
+[[ "$(cat "$HOME/Applications/.NGMBridge-install.lock/pid")" == "$pid_a" ]]
+flock -u 8
+status_a=0
+wait_pid "$pid_a" || status_a=$?
+pid_a=""
+exec 8>&-
+[[ "$status_a" -eq 0 ]]
+[[ "$(cat "$TEMP/flock.stdout")" == "Installed: $DEST" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: flock wait is recorded only after the non-blocking lock fails\n'
