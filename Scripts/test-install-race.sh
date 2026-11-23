@@ -98,6 +98,26 @@ bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/stale.stdout" 2> "$TEMP/st
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 printf 'PASS: a dead installer lock does not block a later install\n'
 
+rm -rf "$DEST" "$HOME/Applications/.NGMBridge-install.lock"
+mkdir -p "$HOME/Applications/.NGMBridge-install.lock"
+printf '%s\n' "$$" > "$HOME/Applications/.NGMBridge-install.lock/pid"
+printf '%s\n' "stale-start-token" > "$HOME/Applications/.NGMBridge-install.lock/started"
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/reuse.stdout" 2> "$TEMP/reuse.stderr" &
+pid_a=$!
+reuse_status=0
+wait_pid "$pid_a" || reuse_status=$?
+pid_a=""
+if [[ "$reuse_status" -ne 0 ]]; then
+    printf 'reused pid lock was not reclaimed\n' >&2
+    cat "$TEMP/reuse.stdout" >&2 || true
+    cat "$TEMP/reuse.stderr" >&2 || true
+    exit 1
+fi
+[[ "$(cat "$TEMP/reuse.stdout")" == "Installed: $DEST" ]]
+[[ -f "$DEST/Contents/MacOS/NGMBridge" ]]
+[[ ! -e "$HOME/Applications/.NGMBridge-install.lock" ]]
+printf 'PASS: a live pid with a different start time does not hold the lock\n'
+
 rm -rf "$DEST"
 rm -f "$FIXTURE_OPEN_LOG"
 mkdir -p "$DEST"
@@ -150,6 +170,95 @@ displaced="${displaced_line#Unexpected destination retained at: }"
 printf 'PASS: destination created during the final rename restores the backup and fails\n'
 
 rm -f "$FIXTURE_ROOT/bin/mv"
+rm -rf "$DEST"
+find "$HOME/Applications" -maxdepth 1 -name '.NGMBridge-displaced.*' -exec rm -rf {} +
+mkdir -p "$HOME/Applications/.NGMBridge-install.orphan/previous.app"
+printf 'orphan backup\n' > "$HOME/Applications/.NGMBridge-install.orphan/previous.app/preserve-marker"
+export FIXTURE_BUILD_STATUS=42
+orphan_status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/orphan.stdout" 2> "$TEMP/orphan.stderr" || orphan_status=$?
+unset FIXTURE_BUILD_STATUS
+[[ "$orphan_status" -eq 42 ]]
+[[ "$(cat "$DEST/preserve-marker")" == "orphan backup" ]]
+[[ ! -e "$HOME/Applications/.NGMBridge-install.orphan" ]]
+[[ ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: a failed install restores a previous app left in a temporary directory\n'
+
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+if [[ "$1" == "$DEST" && "$2" == *'/previous.app' ]]; then
+    /bin/mv "$@"
+    kill -TERM "$PPID"
+    exit 0
+fi
+exec /bin/mv "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/mv"
+rm -f "$FIXTURE_OPEN_LOG"
+signal_status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/signal-mv.stdout" 2> "$TEMP/signal-mv.stderr" || signal_status=$?
+[[ "$signal_status" -ne 0 ]]
+[[ "$(cat "$DEST/preserve-marker")" == "orphan backup" ]]
+[[ ! -s "$TEMP/signal-mv.stdout" ]]
+[[ ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: SIGTERM after the previous app is moved aside restores it\n'
+
+rm -f "$FIXTURE_ROOT/bin/mv"
+export CP_ENTERED="$TEMP/cp.entered"
+export CP_RELEASE="$TEMP/cp.release"
+rm -f "$CP_ENTERED" "$CP_RELEASE" "$FIXTURE_OPEN_LOG"
+cat > "$FIXTURE_ROOT/bin/cp" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+if [[ "${1:-}" == "-R" && "${2:-}" == "$FIXTURE_ROOT/.build/NGMBridge.app" ]]; then
+    printf '%s\n' "$$" >> "$CP_ENTERED"
+    while [[ ! -f "$CP_RELEASE" ]]; do
+        sleep 0.05
+    done
+fi
+exec /bin/cp "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/cp"
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/signal-cp.stdout" 2> "$TEMP/signal-cp.stderr" &
+pid_a=$!
+reached=0
+ticks=0
+while [[ "$ticks" -lt 100 ]]; do
+    if [[ -s "$CP_ENTERED" ]]; then
+        reached=1
+        break
+    fi
+    if ! kill -0 "$pid_a" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
+    ticks=$((ticks + 1))
+done
+if [[ "$reached" != 1 ]]; then
+    printf 'installer did not reach the staged copy before SIGTERM\n' >&2
+    cat "$TEMP/signal-cp.stdout" >&2 || true
+    cat "$TEMP/signal-cp.stderr" >&2 || true
+    exit 1
+fi
+kill -TERM "$pid_a" 2>/dev/null || true
+if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$pid_a" 2>/dev/null || true
+fi
+cp_status=0
+wait_pid "$pid_a" || cp_status=$?
+pid_a=""
+[[ "$cp_status" -ne 0 ]]
+[[ "$(cat "$DEST/preserve-marker")" == "orphan backup" ]]
+[[ ! -s "$TEMP/signal-cp.stdout" ]]
+[[ ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
+printf 'PASS: SIGTERM during the staged copy releases the lock and keeps the installed app\n'
+
+rm -f "$CP_ENTERED" "$CP_RELEASE"
+unset NGMBRIDGE_INSTALL_LOCK_WAIT_LOG || true
 export CP_ENTERED="$TEMP/cp.entered"
 export CP_RELEASE="$TEMP/cp.release"
 export NGMBRIDGE_INSTALL_LOCK_WAIT_LOG="$TEMP/lock-wait"
