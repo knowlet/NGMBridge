@@ -79,10 +79,18 @@ Opening the app once registers the `ngm` URL scheme with Launch Services. The br
 ```bash
 swift format lint --recursive --strict Sources Tests Package.swift
 swift test
+bash ./Scripts/test-install.sh
+bash ./Scripts/test-install-race.sh
 bash ./Scripts/build-app.sh
 ```
 
 A safe parser test fixture is included. Do not commit real `sess...` values or complete launch URLs.
+
+The installer script tests use temporary fixtures and stubbed Swift, signing, and
+app-opening commands. They do not install or open the real app.
+`Scripts/test-install-race.sh` covers a destination created during the final rename,
+overlapping installers, a reused lock pid, a signal during install, and an
+orphaned previous app left in a temporary directory.
 
 ## Security notes
 
