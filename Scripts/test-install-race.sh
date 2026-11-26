@@ -594,3 +594,34 @@ exec 8>&-
 [[ "$(cat "$TEMP/flock.stdout")" == "Installed: $DEST" ]]
 [[ -z "$(find "$HOME/Applications" -name '.NGMBridge-install.*' -print)" ]]
 printf 'PASS: flock wait is recorded only after the non-blocking lock fails\n'
+
+# GNU mv -nT may exit 0 without moving when a destination appears during
+# rollback. A synthetic contender must not be treated as the restored app.
+printf 'original bundle\n' > "$DEST/previous-marker"
+rm -f "$FIXTURE_OPEN_LOG"
+cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+if [[ "$#" == 3 && "$2" == */previous.app && "$3" == "$DEST" ]]; then
+    mkdir -p "$DEST"
+    printf 'contender\n' > "$DEST/contender-marker"
+    exit 0
+fi
+if [[ "$#" == 3 && "$1" == "-n" && "$3" == "$DEST" ]]; then
+    exit 77
+fi
+exec /bin/mv "$@"
+STUB
+chmod +x "$FIXTURE_ROOT/bin/mv"
+status=0
+bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/no-op.stdout" 2> "$TEMP/no-op.stderr" || status=$?
+[[ "$status" == 77 ]]
+[[ ! -s "$TEMP/no-op.stdout" && ! -e "$FIXTURE_OPEN_LOG" ]]
+[[ -f "$DEST/contender-marker" && ! -e "$DEST/previous-marker" ]]
+backup="$(find "$HOME/Applications" -path '*/previous.app/previous-marker' -print)"
+[[ -n "$backup" && "$(cat "$backup")" == 'original bundle' ]]
+grep -Fxq "Previous installation retained at: ${backup%/previous-marker}" "$TEMP/no-op.stderr" || {
+    printf 'The prior bundle was not restored; expected its recovery location on stderr.\n' >&2
+    exit 1
+}
+printf 'PASS: no-op rollback is reported and preserves the previous bundle\n'

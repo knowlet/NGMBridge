@@ -201,8 +201,14 @@ rename_noreplace() {
     local err=""
     local status=0
     local base=""
-    err="$(mv -nT "$src" "$dest" 2>&1)" && return 0
-    status=$?
+    if err="$(mv -nT "$src" "$dest" 2>&1)"; then
+        # Some GNU mv versions return 0 even when -n skips the rename.
+        # An existing destination is not evidence that it was restored.
+        [[ ! -e "$src" && ! -L "$src" ]]
+        return $?
+    else
+        status=$?
+    fi
     if [[ ! -e "$src" && ! -L "$src" ]]; then
         base="${src##*/}"
         if [[ -e "$dest/$base" || -L "$dest/$base" ]]; then
