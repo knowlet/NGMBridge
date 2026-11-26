@@ -562,8 +562,14 @@ cp_lines="$(wc -l < "$CP_ENTERED" | tr -d '[:space:]')"
 printf 'PASS: overlapping installers take the lock one at a time and do not nest\n'
 
 rm -f "$FIXTURE_ROOT/bin/cp" "$NGMBRIDGE_INSTALL_LOCK_WAIT_LOG" "$FIXTURE_OPEN_LOG"
+# macOS has Perl flock(2) but no flock command. Lock the inherited open
+# file description just as the installer does for its no-CLI fallback.
+fixture_flock() {
+    perl -e 'use Fcntl qw(:flock); open(my $fh, ">>&", 8) or die $!;
+        flock($fh, $ARGV[0] eq "unlock" ? LOCK_UN : LOCK_EX) or die $!;' "$1"
+}
 exec 8>>"$HOME/Applications/.NGMBridge-install-lock"
-flock 8
+fixture_flock lock
 bash "$FIXTURE_ROOT/Scripts/install-user.sh" > "$TEMP/flock.stdout" 2> "$TEMP/flock.stderr" &
 pid_a=$!
 logged=0
@@ -585,7 +591,7 @@ done
 [[ ! -s "$TEMP/flock.stdout" ]]
 [[ -d "$HOME/Applications/.NGMBridge-install.lock" ]]
 [[ "$(cat "$HOME/Applications/.NGMBridge-install.lock/pid")" == "$pid_a" ]]
-flock -u 8
+fixture_flock unlock
 status_a=0
 wait_pid "$pid_a" || status_a=$?
 pid_a=""
@@ -602,7 +608,7 @@ rm -f "$FIXTURE_OPEN_LOG"
 cat > "$FIXTURE_ROOT/bin/mv" <<'STUB'
 #!/bin/bash
 set -euo pipefail
-if [[ "$#" == 3 && "$2" == */previous.app && "$3" == "$DEST" ]]; then
+if [[ "$#" == 3 && "$1" == "-nT" && "$2" == */previous.app && "$3" == "$DEST" ]]; then
     mkdir -p "$DEST"
     printf 'contender\n' > "$DEST/contender-marker"
     exit 0
